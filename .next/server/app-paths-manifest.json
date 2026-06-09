@@ -1,0 +1,8 @@
+{
+  "/api/speedtest/download/route": "app/api/speedtest/download/route.js",
+  "/api/speedtest/upload/route": "app/api/speedtest/upload/route.js",
+  "/api/speedtest/ping/route": "app/api/speedtest/ping/route.js",
+  "/api/sheets/route": "app/api/sheets/route.js",
+  "/page": "app/page.js",
+  "/dashboard/page": "app/dashboard/page.js"
+}
