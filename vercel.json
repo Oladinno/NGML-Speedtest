@@ -1,0 +1,19 @@
+{
+  "functions": {
+    "src/app/api/speedtest/download/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/speedtest/upload/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/speedtest/ping/route.ts": {
+      "maxDuration": 10
+    },
+    "src/app/api/sheets/route.ts": {
+      "maxDuration": 30
+    },
+    "src/app/api/migrate/route.ts": {
+      "maxDuration": 30
+    }
+  }
+}
