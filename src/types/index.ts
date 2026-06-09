@@ -10,7 +10,14 @@ export interface SpeedTestResult {
   score?: number;
   status?: "good" | "average" | "poor";
   employeeName?: string;
+  clientIp?: string;
+  clientCity?: string;
+  clientRegion?: string;
+  clientCountry?: string;
+  asOwner?: string;
+  edgeId?: string;
 }
+
 
 export interface SpeedTestState {
   status:

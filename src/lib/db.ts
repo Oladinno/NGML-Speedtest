@@ -24,6 +24,13 @@ export async function initDatabase(): Promise<void> {
       employee_name TEXT DEFAULT ''
     );
   `;
+  // Add metadata columns if they do not exist
+  await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS client_ip TEXT DEFAULT ''`;
+  await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS client_city TEXT DEFAULT ''`;
+  await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS client_region TEXT DEFAULT ''`;
+  await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS client_country TEXT DEFAULT ''`;
+  await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS as_owner TEXT DEFAULT ''`;
+  await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS edge_id TEXT DEFAULT ''`;
 }
 
 export async function saveResult(result: SpeedTestResult): Promise<void> {
@@ -32,7 +39,9 @@ export async function saveResult(result: SpeedTestResult): Promise<void> {
     INSERT INTO speedtest_results (
       timestamp, download_mbps, upload_mbps, ping_ms,
       loaded_latency_ms, unloaded_latency_ms, jitter_ms,
-      score, status, employee_name
+      score, status, employee_name,
+      client_ip, client_city, client_region, client_country,
+      as_owner, edge_id
     )
     VALUES (
       ${result.timestamp},
@@ -44,7 +53,13 @@ export async function saveResult(result: SpeedTestResult): Promise<void> {
       ${result.jitterMs || 0},
       ${result.score || 0},
       ${result.status || "average"},
-      ${result.employeeName || ""}
+      ${result.employeeName || ""},
+      ${result.clientIp || ""},
+      ${result.clientCity || ""},
+      ${result.clientRegion || ""},
+      ${result.clientCountry || ""},
+      ${result.asOwner || ""},
+      ${result.edgeId || ""}
     )
   `;
 }
@@ -70,6 +85,12 @@ export async function getResults(): Promise<SpeedTestResult[]> {
     score: Number(row.score || 0),
     status: row.status || "average",
     employeeName: row.employee_name || "",
+    clientIp: row.client_ip || "",
+    clientCity: row.client_city || "",
+    clientRegion: row.client_region || "",
+    clientCountry: row.client_country || "",
+    asOwner: row.as_owner || "",
+    edgeId: row.edge_id || "",
   }));
 }
 

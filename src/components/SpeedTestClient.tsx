@@ -7,6 +7,7 @@ import {
   measureUploadSpeed,
   measurePing,
   measureLoadedLatency,
+  ConnectionMeta,
 } from "@/lib/speedtest";
 
 type Status = "good" | "average" | "poor";
@@ -133,6 +134,7 @@ export default function SpeedTestClient() {
 
   const [selectedServer, setSelectedServer] = useState(SERVERS[0]);
   const [employeeName, setEmployeeName] = useState("");
+  const [connectionMeta, setConnectionMeta] = useState<ConnectionMeta | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const isRunning = useRef(false);
@@ -168,6 +170,9 @@ export default function SpeedTestClient() {
 
       // 3. Measure Ping & Jitter
       const ping = await measurePing();
+      if (ping.meta) {
+        setConnectionMeta(ping.meta);
+      }
 
       setState((s) => ({
         ...s,
@@ -201,6 +206,12 @@ export default function SpeedTestClient() {
         score,
         status,
         employeeName: employeeName || undefined,
+        clientIp: ping.meta?.clientIp,
+        clientCity: ping.meta?.clientCity,
+        clientRegion: ping.meta?.clientRegion,
+        clientCountry: ping.meta?.clientCountry,
+        asOwner: ping.meta?.asOwner,
+        edgeId: ping.meta?.edgeId,
       };
 
       setSaving(true);
@@ -238,6 +249,7 @@ export default function SpeedTestClient() {
       jitterMs: 0,
       progress: 0,
     });
+    setConnectionMeta(null);
     setSaved(false);
     isRunning.current = false;
   };
@@ -496,7 +508,14 @@ export default function SpeedTestClient() {
                   <circle r="16" fill="var(--surface-container-lowest)" stroke="var(--secondary)" strokeWidth="2.5" />
                   <circle r="6" fill="var(--secondary)" className={isTesting ? "animate-pulse" : ""} />
                   {isTesting && <circle r="22" fill="none" stroke="var(--secondary)" strokeWidth="1" className="animate-map-pulse" />}
-                  <text y="32" textAnchor="middle" fill="var(--on-surface-variant)" className="text-[9px] font-bold">CLIENT NODE</text>
+                  <text y="32" textAnchor="middle" fill="var(--on-surface-variant)" className="text-[9px] font-bold">
+                    {connectionMeta?.clientIp || "CLIENT NODE"}
+                  </text>
+                  {connectionMeta?.clientCity && (
+                    <text y="42" textAnchor="middle" fill="var(--on-surface-variant)" className="text-[7.5px] opacity-70">
+                      {connectionMeta.clientCity}, {connectionMeta.clientCountry}
+                    </text>
+                  )}
                 </g>
 
                 {/* Right Node: Target Server */}
@@ -504,7 +523,14 @@ export default function SpeedTestClient() {
                   <circle r="16" fill="var(--surface-container-lowest)" stroke="var(--purple-500)" strokeWidth="2.5" />
                   <circle r="6" fill="var(--purple-500)" className={isTesting ? "animate-pulse" : ""} />
                   {isTesting && <circle r="22" fill="none" stroke="var(--purple-500)" strokeWidth="1" className="animate-map-pulse" />}
-                  <text y="32" textAnchor="middle" fill="var(--on-surface-variant)" className="text-[9px] font-bold uppercase truncate max-w-[80px]">{selectedServer.id}</text>
+                  <text y="32" textAnchor="middle" fill="var(--on-surface-variant)" className="text-[9px] font-bold uppercase truncate max-w-[80px]">
+                    {connectionMeta?.edgeId ? `EDGE: ${connectionMeta.edgeId.split("::")[0]}` : selectedServer.id}
+                  </text>
+                  {connectionMeta?.asOwner && (
+                    <text y="42" textAnchor="middle" fill="var(--on-surface-variant)" className="text-[7.5px] opacity-70 truncate max-w-[80px]">
+                      {connectionMeta.asOwner.length > 18 ? `${connectionMeta.asOwner.substring(0, 15)}...` : connectionMeta.asOwner}
+                    </text>
+                  )}
                 </g>
               </svg>
             </div>
@@ -576,6 +602,22 @@ export default function SpeedTestClient() {
                   {saving ? "Transmitting payload..." : saved ? "Synced successfully" : "Saving payload..."}
                 </span>
               </div>
+
+              {connectionMeta && (
+                <div className="border-t border-border-subtle pt-3 flex flex-col gap-1.5 text-[11px] animate-fade-in">
+                  <span className="font-bold text-secondary uppercase tracking-widest text-[9px]">Edge Diagnostic Telemetry</span>
+                  <div className="grid grid-cols-2 gap-y-1.5 text-on-surface-variant text-[10px] bg-surface-container/20 p-3 rounded-2xl border border-border-subtle/30">
+                    <div>Client IP:</div>
+                    <div className="text-right text-on-surface font-semibold tabular-nums">{connectionMeta.clientIp || "—"}</div>
+                    <div>Location:</div>
+                    <div className="text-right text-on-surface font-semibold">{connectionMeta.clientCity ? `${connectionMeta.clientCity}, ${connectionMeta.clientCountry}` : "—"}</div>
+                    <div>ISP / AS Owner:</div>
+                    <div className="text-right text-on-surface font-semibold truncate" title={connectionMeta.asOwner}>{connectionMeta.asOwner || "—"}</div>
+                    <div>Vercel Gateway:</div>
+                    <div className="text-right text-on-surface font-semibold truncate" title={connectionMeta.edgeId}>{connectionMeta.edgeId ? connectionMeta.edgeId.split("::")[0] : "—"}</div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

@@ -45,23 +45,66 @@ function makeUploadBlob(sizeMB: number): Blob {
   return new Blob(chunks, { type: "application/octet-stream" });
 }
 
+// ─── Connection Meta Interface ────────────────────────────────────────────────
+export interface ConnectionMeta {
+  clientIp?: string;
+  clientCity?: string;
+  clientRegion?: string;
+  clientCountry?: string;
+  asOwner?: string;
+  edgeId?: string;
+}
+
 // ─── Ping helpers ─────────────────────────────────────────────────────────────
-async function pingOnce(signal?: AbortSignal): Promise<number> {
+async function pingOnce(signal?: AbortSignal): Promise<{ duration: number; meta?: ConnectionMeta }> {
   const start = performance.now();
-  await fetch(`/api/speedtest/ping?t=${Date.now()}&n=${Math.random()}`, {
+  const response = await fetch(`/api/speedtest/ping?t=${Date.now()}&n=${Math.random()}`, {
     cache: "no-store",
     signal,
   });
-  return performance.now() - start;
+  const duration = performance.now() - start;
+
+  // Retrieve geo/infra headers set by our Vercel-facing 204 handler
+  const clientIp = response.headers.get("x-client-ip") || undefined;
+  const cityHeader = response.headers.get("x-client-city");
+  const clientCity = cityHeader ? decodeURIComponent(cityHeader) : undefined;
+  const clientRegion = response.headers.get("x-client-region") || undefined;
+  const clientCountry = response.headers.get("x-client-country") || undefined;
+  const asHeader = response.headers.get("x-as-owner");
+  const asOwner = asHeader ? decodeURIComponent(asHeader) : undefined;
+  const edgeId = response.headers.get("x-edge-id") || undefined;
+
+  return {
+    duration,
+    meta: {
+      clientIp,
+      clientCity,
+      clientRegion,
+      clientCountry,
+      asOwner,
+      edgeId,
+    }
+  };
 }
 
-export interface PingResult { unloaded: number; jitter: number; }
+export interface PingResult {
+  unloaded: number;
+  jitter: number;
+  meta?: ConnectionMeta;
+}
 export interface LatencyResult { loaded: number; unloaded: number; jitter: number; }
 
 export async function measurePing(): Promise<PingResult> {
   const samples: number[] = [];
+  let connectionMeta: ConnectionMeta | undefined;
+
   for (let i = 0; i < PING_SAMPLES; i++) {
-    samples.push(await pingOnce());
+    const res = await pingOnce();
+    samples.push(res.duration);
+    // Collect metadata from the first response headers
+    if (i === 0 && res.meta) {
+      connectionMeta = res.meta;
+    }
     await new Promise((r) => setTimeout(r, 80));
   }
   samples.sort((a, b) => a - b);
@@ -72,6 +115,7 @@ export async function measurePing(): Promise<PingResult> {
   return {
     unloaded: Math.round(mean * 10) / 10,
     jitter:   Math.round(Math.sqrt(variance) * 10) / 10,
+    meta:     connectionMeta,
   };
 }
 
@@ -84,7 +128,8 @@ export async function measureLoadedLatency(): Promise<number> {
     while (!(await reader.read()).done) { /* drain */ }
   });
   for (let i = 0; i < 6; i++) {
-    samples.push(await pingOnce());
+    const res = await pingOnce();
+    samples.push(res.duration);
     await new Promise((r) => setTimeout(r, 200));
   }
   await downloadPromise;
@@ -94,24 +139,25 @@ export async function measureLoadedLatency(): Promise<number> {
 }
 
 // ─── Download speed ───────────────────────────────────────────────────────────
-// Industry-standard multi-request loop:
-//   Each stream fires small (~4MB) fetch requests back-to-back until the timer
-//   fires. The server is a stateless byte-pump — no long-lived connection needed.
-//   This works identically on Vercel, Railway, Render, AWS Lambda, or bare Node.js.
+// Industry-standard multi-request loop with Adaptive Warmup Filter:
+//   Discards the first 2 completed chunks per stream to let the TCP slow-start
+//   window open fully. The moment a stream enters its 3rd chunk, we set
+//   measureStart and begin accumulating measuredBytes.
 export async function measureDownloadSpeed(
   onProgress?: (mbps: number) => void
 ): Promise<number> {
-  let totalBytes    = 0; // all bytes received (incl. warmup)
-  let measuredBytes = 0; // bytes received AFTER warmup
+  let totalBytes    = 0;
+  let measuredBytes = 0;
   let measureStart  = 0;
-  let warmupDone    = false;
+
+  // Track completed chunks per stream
+  const streamCompletedChunks = new Array(DOWNLOAD_STREAMS).fill(0);
 
   // Sliding-window progress display
   let lastReportTime  = performance.now();
   let lastReportBytes = 0;
 
   const testStart = performance.now();
-  // One AbortController per stream; the timer fires abort() after the window
   const abortControllers: AbortController[] = [];
 
   const runStream = async (index: number): Promise<void> => {
@@ -119,7 +165,6 @@ export async function measureDownloadSpeed(
     abortControllers.push(ac);
 
     try {
-      // Keep firing requests until the test window timer aborts us
       while (!ac.signal.aborted) {
         let response: Response;
         try {
@@ -129,7 +174,6 @@ export async function measureDownloadSpeed(
           );
         } catch (e) {
           if ((e as Error).name === "AbortError") break;
-          // Brief pause before retrying on transient network error
           await new Promise((r) => setTimeout(r, 200));
           continue;
         }
@@ -138,6 +182,9 @@ export async function measureDownloadSpeed(
           await new Promise((r) => setTimeout(r, 200));
           continue;
         }
+
+        // Determine if this chunk is still part of the warmup for this stream
+        const isWarmup = streamCompletedChunks[index] < 2;
 
         const reader = response.body.getReader();
         try {
@@ -148,16 +195,15 @@ export async function measureDownloadSpeed(
             const bytes = value?.length ?? 0;
             totalBytes += bytes;
 
-            const now     = performance.now();
-            const elapsed = now - testStart;
+            const now = performance.now();
 
-            // Discard warmup bytes
-            if (!warmupDone && elapsed >= DOWNLOAD_WARMUP_MS) {
-              warmupDone    = true;
-              measureStart  = now;
-              measuredBytes = 0;
+            if (!isWarmup) {
+              // Start counting time from the first non-warmup byte
+              if (measureStart === 0) {
+                measureStart = now;
+              }
+              measuredBytes += bytes;
             }
-            if (warmupDone) measuredBytes += bytes;
 
             // Sliding-window progress update every 500ms
             if (onProgress && now - lastReportTime >= 500) {
@@ -168,9 +214,10 @@ export async function measureDownloadSpeed(
               lastReportBytes = totalBytes;
             }
           }
+          // Increment completed chunk count for this stream
+          streamCompletedChunks[index]++;
         } catch (e) {
           if ((e as Error).name === "AbortError") break;
-          // Stream cancelled by abort — outer loop will exit on next check
         }
       }
     } catch (e) {
@@ -178,7 +225,6 @@ export async function measureDownloadSpeed(
     }
   };
 
-  // Auto-abort all streams after the test window
   const timer = setTimeout(
     () => abortControllers.forEach((ac) => ac.abort()),
     DOWNLOAD_DURATION_MS
@@ -196,13 +242,13 @@ export async function measureDownloadSpeed(
 }
 
 // ─── Upload speed ─────────────────────────────────────────────────────────────
-// Industry-standard multi-request loop:
-//   Each XHR stream fires small (~4MB) upload requests back-to-back until the
-//   AbortSignal fires. xhr.upload.onprogress fires as bytes leave the OS send
-//   buffer — the most accurate client-side upload measurement possible.
+// Industry-standard multi-request loop with Adaptive Warmup Filter:
+//   Discards the first 2 completed upload chunks per stream from speed calculations.
 function xhrUploadStream(
   blob: Blob,
-  onBytesSent: (delta: number) => void,
+  onBytesSent: (delta: number, isWarmup: boolean) => void,
+  onChunkComplete: () => void,
+  isWarmupFn: () => boolean,
   signal: AbortSignal
 ): Promise<void> {
   return new Promise((resolve) => {
@@ -211,7 +257,6 @@ function xhrUploadStream(
     const xhr = new XMLHttpRequest();
     let lastLoaded = 0;
 
-    // When the signal fires, abort the current XHR and stop looping
     const onAbort = () => { xhr.abort(); };
     signal.addEventListener("abort", onAbort, { once: true });
 
@@ -222,20 +267,21 @@ function xhrUploadStream(
       if (signal.aborted) return;
       const delta = e.loaded - lastLoaded;
       lastLoaded  = e.loaded;
-      if (delta > 0) onBytesSent(delta);
+      if (delta > 0) {
+        onBytesSent(delta, isWarmupFn());
+      }
     };
 
     xhr.onload = () => {
       signal.removeEventListener("abort", onAbort);
-      // Immediately start next upload unless we've been aborted
+      onChunkComplete();
       if (!signal.aborted) {
-        xhrUploadStream(blob, onBytesSent, signal).then(resolve);
+        xhrUploadStream(blob, onBytesSent, onChunkComplete, isWarmupFn, signal).then(resolve);
       } else {
         resolve();
       }
     };
 
-    // Resolve (don't reject) on error/abort — one failed stream shouldn't kill the test
     xhr.onerror = () => { signal.removeEventListener("abort", onAbort); resolve(); };
     xhr.onabort = () => { signal.removeEventListener("abort", onAbort); resolve(); };
 
@@ -244,39 +290,44 @@ function xhrUploadStream(
 }
 
 export async function measureUploadSpeed(): Promise<number> {
-  // Pre-build one blob — reused by all streams (no extra allocations)
   const blob = makeUploadBlob(UPLOAD_CHUNK_MB);
 
   let totalSent    = 0;
   let measuredSent = 0;
   let measureStart = 0;
-  let warmupDone   = false;
-  const testStart  = performance.now();
 
-  const handleBytes = (delta: number) => {
+  // Track completed chunks per stream
+  const streamCompletedChunks = new Array(UPLOAD_STREAMS).fill(0);
+
+  const handleBytes = (delta: number, isWarmup: boolean) => {
     totalSent += delta;
-    const now     = performance.now();
-    const elapsed = now - testStart;
-
-    if (!warmupDone && elapsed >= UPLOAD_WARMUP_MS) {
-      warmupDone   = true;
-      measureStart = now;
-      measuredSent = 0;
+    if (!isWarmup) {
+      if (measureStart === 0) {
+        measureStart = performance.now();
+      }
+      measuredSent += delta;
     }
-    if (warmupDone) measuredSent += delta;
   };
 
-  // One AbortController per stream
   const acs = Array.from({ length: UPLOAD_STREAMS }, () => new AbortController());
 
-  // Abort all streams after the test window
   const timer = setTimeout(
     () => acs.forEach((ac) => ac.abort()),
     UPLOAD_DURATION_MS
   );
 
   await Promise.allSettled(
-    acs.map((ac) => xhrUploadStream(blob, handleBytes, ac.signal))
+    acs.map((ac, index) =>
+      xhrUploadStream(
+        blob,
+        handleBytes,
+        () => {
+          streamCompletedChunks[index]++;
+        },
+        () => streamCompletedChunks[index] < 2,
+        ac.signal
+      )
+    )
   );
   clearTimeout(timer);
 
