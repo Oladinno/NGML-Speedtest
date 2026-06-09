@@ -107,12 +107,12 @@ function useAnimatedNumber(value: number, duration = 600) {
 
 function statusLabel(status: SpeedTestState["status"]): string {
   switch (status) {
-    case "testing-download": return "DOWNLOAD TEST";
-    case "testing-upload": return "UPLOAD TEST";
-    case "testing-ping": return "PING/JITTER TEST";
-    case "testing-loaded-latency": return "LOAD TEST";
-    case "complete": return "FINISHED";
-    case "error": return "FAILED";
+    case "testing-download": return "DOWNLOAD (~14s)";
+    case "testing-upload":   return "UPLOAD (~12s)";
+    case "testing-ping":     return "PING / JITTER";
+    case "testing-loaded-latency": return "LOADED LATENCY";
+    case "complete": return "COMPLETE";
+    case "error":    return "FAILED";
     default: return "READY";
   }
 }
@@ -154,60 +154,50 @@ export default function SpeedTestClient() {
     });
 
     try {
-      // 1. Measure Download Speed
+      // 1. Measure Download Speed (parallel streams, warmup excluded — ~14s)
       const downloadMbps = await measureDownloadSpeed((mbps) => {
-        // Adjust client speed dynamically based on selected server latency decay
-        const speedModifier = selectedServer.id === "ny" ? 1.0 : selectedServer.id === "london" ? 0.85 : selectedServer.id === "frankfurt" ? 0.78 : 0.42;
-        setState((s) => ({ ...s, downloadMbps: mbps * speedModifier, progress: 25 }));
+        setState((s) => ({ ...s, downloadMbps: mbps, progress: 25 }));
       });
-      const speedModifier = selectedServer.id === "ny" ? 1.0 : selectedServer.id === "london" ? 0.85 : selectedServer.id === "frankfurt" ? 0.78 : 0.42;
-      const finalDownload = downloadMbps * speedModifier;
 
-      setState((s) => ({ ...s, downloadMbps: finalDownload, status: "testing-upload", progress: 50 }));
+      setState((s) => ({ ...s, downloadMbps, status: "testing-upload", progress: 50 }));
 
-      // 2. Measure Upload Speed
+      // 2. Measure Upload Speed (parallel XHR streams, warmup excluded — ~12s)
       const uploadMbps = await measureUploadSpeed();
-      const finalUpload = uploadMbps * speedModifier;
 
-      setState((s) => ({ ...s, uploadMbps: finalUpload, status: "testing-ping", progress: 70 }));
+      setState((s) => ({ ...s, uploadMbps, status: "testing-ping", progress: 70 }));
 
       // 3. Measure Ping & Jitter
       const ping = await measurePing();
-      // Adjust pings based on selected server node latency base
-      const latencyModifier = selectedServer.latencyMs - 12; // NY is 12ms baseline
-      const adjustedPingMs = Math.max(1.5, ping.unloaded + latencyModifier);
-      const adjustedJitter = Math.max(0.5, ping.jitter + (latencyModifier * 0.05));
 
       setState((s) => ({
         ...s,
-        pingMs: adjustedPingMs,
-        jitterMs: adjustedJitter,
-        unloadedLatencyMs: adjustedPingMs,
+        pingMs: ping.unloaded,
+        jitterMs: ping.jitter,
+        unloadedLatencyMs: ping.unloaded,
         status: "testing-loaded-latency",
         progress: 85,
       }));
 
       // 4. Measure Loaded Latency
       const loaded = await measureLoadedLatency();
-      const adjustedLoadedMs = Math.max(adjustedPingMs + 5, loaded + latencyModifier);
 
       setState((s) => ({
         ...s,
-        loadedLatencyMs: adjustedLoadedMs,
+        loadedLatencyMs: loaded,
         status: "complete",
         progress: 100,
       }));
 
-      const { score, status } = computeScore(finalDownload, finalUpload, adjustedPingMs, adjustedJitter);
+      const { score, status } = computeScore(downloadMbps, uploadMbps, ping.unloaded, ping.jitter);
 
       const result = {
         timestamp: new Date().toISOString(),
-        downloadMbps: finalDownload,
-        uploadMbps: finalUpload,
-        pingMs: adjustedPingMs,
-        loadedLatencyMs: adjustedLoadedMs,
-        unloadedLatencyMs: adjustedPingMs,
-        jitterMs: adjustedJitter,
+        downloadMbps,
+        uploadMbps,
+        pingMs: ping.unloaded,
+        loadedLatencyMs: loaded,
+        unloadedLatencyMs: ping.unloaded,
+        jitterMs: ping.jitter,
         score,
         status,
         employeeName: employeeName || undefined,
