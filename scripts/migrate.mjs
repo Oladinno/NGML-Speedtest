@@ -13,6 +13,12 @@ await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS unloaded_latenc
 await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS jitter_ms DOUBLE PRECISION DEFAULT 0`;
 await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS score INTEGER DEFAULT 0`;
 await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'average'`;
+await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS client_ip TEXT DEFAULT ''`;
+await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS client_city TEXT DEFAULT ''`;
+await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS client_region TEXT DEFAULT ''`;
+await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS client_country TEXT DEFAULT ''`;
+await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS as_owner TEXT DEFAULT ''`;
+await sql`ALTER TABLE speedtest_results ADD COLUMN IF NOT EXISTS edge_id TEXT DEFAULT ''`;
 
 console.log("Migration complete: new columns added");
 process.exit(0);

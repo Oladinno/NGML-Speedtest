@@ -216,12 +216,12 @@ export default function SpeedTestClient() {
 
       setSaving(true);
       try {
-        await fetch("/api/sheets", {
+        const res = await fetch("/api/sheets", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(result),
         });
-        setSaved(true);
+        if (res.ok) setSaved(true);
       } catch (err) {
         console.error(err);
       } finally {
