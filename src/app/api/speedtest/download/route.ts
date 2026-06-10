@@ -41,16 +41,14 @@ export async function GET(request: NextRequest) {
   // pull()-based ReadableStream: the runtime calls pull() only when the consumer
   // is ready — proper backpressure, no artificial delays.
   const stream = new ReadableStream({
-    pull(controller) {
-      if (sent >= totalBytes) {
-        controller.close();
-        return;
+    start(controller) {
+      let sent = 0;
+      while (sent < totalBytes) {
+        const len = Math.min(CHUNK_SIZE, totalBytes - sent);
+        controller.enqueue(FILLER_CHUNK.subarray(0, len));
+        sent += len;
       }
-      const remaining = totalBytes - sent;
-      const len = Math.min(CHUNK_SIZE, remaining);
-      // subarray() is a zero-copy view — no allocation per chunk
-      controller.enqueue(FILLER_CHUNK.subarray(0, len));
-      sent += len;
+      controller.close();
     },
   });
 

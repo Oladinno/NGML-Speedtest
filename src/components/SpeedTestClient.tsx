@@ -139,6 +139,36 @@ export default function SpeedTestClient() {
   const [saved, setSaved] = useState(false);
   const isRunning = useRef(false);
 
+  // Auto-detect connection metadata and nearest server on mount
+  useEffect(() => {
+    const detect = async () => {
+      try {
+        const ping = await measurePing();
+        if (ping.meta) {
+          setConnectionMeta(ping.meta);
+          // Map Vercel Edge ID prefix to one of our target SERVERS
+          const edge = ping.meta.edgeId?.toLowerCase() || "";
+          if (edge) {
+            let matchedServer = SERVERS[0];
+            if (edge.includes("iad") || edge.includes("cle") || edge.includes("nyc") || edge.includes("bos")) {
+              matchedServer = SERVERS.find((s) => s.id === "ny") || SERVERS[0];
+            } else if (edge.includes("lhr") || edge.includes("cdg") || edge.includes("ams") || edge.includes("dub")) {
+              matchedServer = SERVERS.find((s) => s.id === "london") || SERVERS[0];
+            } else if (edge.includes("fra") || edge.includes("muc")) {
+              matchedServer = SERVERS.find((s) => s.id === "frankfurt") || SERVERS[0];
+            } else if (edge.includes("hnd") || edge.includes("nrt") || edge.includes("hkg") || edge.includes("sin") || edge.includes("icn")) {
+              matchedServer = SERVERS.find((s) => s.id === "tokyo") || SERVERS[0];
+            }
+            setSelectedServer(matchedServer);
+          }
+        }
+      } catch (err) {
+        console.warn("Auto-detect server latency failed:", err);
+      }
+    };
+    detect();
+  }, []);
+
   const runTest = useCallback(async () => {
     if (isRunning.current) return;
     isRunning.current = true;
@@ -164,7 +194,9 @@ export default function SpeedTestClient() {
       setState((s) => ({ ...s, downloadMbps, status: "testing-upload", progress: 50 }));
 
       // 2. Measure Upload Speed (parallel XHR streams, warmup excluded — ~12s)
-      const uploadMbps = await measureUploadSpeed();
+      const uploadMbps = await measureUploadSpeed((mbps) => {
+        setState((s) => ({ ...s, uploadMbps: mbps, progress: 65 }));
+      });
 
       setState((s) => ({ ...s, uploadMbps, status: "testing-ping", progress: 70 }));
 

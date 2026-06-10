@@ -139,25 +139,23 @@ export async function measureLoadedLatency(): Promise<number> {
 }
 
 // ─── Download speed ───────────────────────────────────────────────────────────
-// Industry-standard multi-request loop with Adaptive Warmup Filter:
-//   Discards the first 2 completed chunks per stream to let the TCP slow-start
-//   window open fully. The moment a stream enters its 3rd chunk, we set
-//   measureStart and begin accumulating measuredBytes.
+// Industry-standard multi-request loop with Time-Based Warmup:
+//   Discards all bytes downloaded during the first DOWNLOAD_WARMUP_MS seconds
+//   of the test to bypass TCP slow-start. Computes progress using a rolling
+//   window delta to ensure smooth live gauge updates.
 export async function measureDownloadSpeed(
   onProgress?: (mbps: number) => void
 ): Promise<number> {
   let totalBytes    = 0;
   let measuredBytes = 0;
-  let measureStart  = 0;
-
-  // Track completed chunks per stream
-  const streamCompletedChunks = new Array(DOWNLOAD_STREAMS).fill(0);
-
-  // Sliding-window progress display
-  let lastReportTime  = performance.now();
-  let lastReportBytes = 0;
 
   const testStart = performance.now();
+  const warmupEndTime = testStart + DOWNLOAD_WARMUP_MS;
+
+  // Sliding-window progress display (independent of measured bytes)
+  let lastReportTime = performance.now();
+  let bytesInWindow  = 0;
+
   const abortControllers: AbortController[] = [];
 
   const runStream = async (index: number): Promise<void> => {
@@ -183,9 +181,6 @@ export async function measureDownloadSpeed(
           continue;
         }
 
-        // Determine if this chunk is still part of the warmup for this stream
-        const isWarmup = streamCompletedChunks[index] < 2;
-
         const reader = response.body.getReader();
         try {
           while (true) {
@@ -194,28 +189,23 @@ export async function measureDownloadSpeed(
 
             const bytes = value?.length ?? 0;
             totalBytes += bytes;
+            bytesInWindow += bytes;
 
             const now = performance.now();
 
-            if (!isWarmup) {
-              // Start counting time from the first non-warmup byte
-              if (measureStart === 0) {
-                measureStart = now;
-              }
+            // Accumulate bytes for measurement only after warmup period completes
+            if (now >= warmupEndTime) {
               measuredBytes += bytes;
             }
 
             // Sliding-window progress update every 500ms
             if (onProgress && now - lastReportTime >= 500) {
-              const dt     = (now - lastReportTime) / 1000;
-              const dBytes = totalBytes - lastReportBytes;
-              onProgress((dBytes * 8) / dt / 1_000_000);
-              lastReportTime  = now;
-              lastReportBytes = totalBytes;
+              const dt = (now - lastReportTime) / 1000;
+              onProgress((bytesInWindow * 8) / dt / 1_000_000);
+              lastReportTime = now;
+              bytesInWindow  = 0;
             }
           }
-          // Increment completed chunk count for this stream
-          streamCompletedChunks[index]++;
         } catch (e) {
           if ((e as Error).name === "AbortError") break;
         }
@@ -235,20 +225,20 @@ export async function measureDownloadSpeed(
   );
   clearTimeout(timer);
 
-  const elapsed = (performance.now() - measureStart) / 1000;
+  const testEnd = performance.now();
+  const elapsed = (testEnd - warmupEndTime) / 1000;
   if (elapsed <= 0 || measuredBytes === 0) return 0;
 
   return Math.round((measuredBytes * 8) / elapsed / 1_000_000 * 100) / 100;
 }
 
 // ─── Upload speed ─────────────────────────────────────────────────────────────
-// Industry-standard multi-request loop with Adaptive Warmup Filter:
-//   Discards the first 2 completed upload chunks per stream from speed calculations.
+// Industry-standard multi-request loop with Time-Based Warmup:
+//   Uses XHR progress events to measure upload throughput. Discards the first
+//   UPLOAD_WARMUP_MS seconds, and exposes real-time speed in an onProgress callback.
 function xhrUploadStream(
   blob: Blob,
-  onBytesSent: (delta: number, isWarmup: boolean) => void,
-  onChunkComplete: () => void,
-  isWarmupFn: () => boolean,
+  onBytesSent: (delta: number) => void,
   signal: AbortSignal
 ): Promise<void> {
   return new Promise((resolve) => {
@@ -268,15 +258,14 @@ function xhrUploadStream(
       const delta = e.loaded - lastLoaded;
       lastLoaded  = e.loaded;
       if (delta > 0) {
-        onBytesSent(delta, isWarmupFn());
+        onBytesSent(delta);
       }
     };
 
     xhr.onload = () => {
       signal.removeEventListener("abort", onAbort);
-      onChunkComplete();
       if (!signal.aborted) {
-        xhrUploadStream(blob, onBytesSent, onChunkComplete, isWarmupFn, signal).then(resolve);
+        xhrUploadStream(blob, onBytesSent, signal).then(resolve);
       } else {
         resolve();
       }
@@ -289,23 +278,35 @@ function xhrUploadStream(
   });
 }
 
-export async function measureUploadSpeed(): Promise<number> {
+export async function measureUploadSpeed(
+  onProgress?: (mbps: number) => void
+): Promise<number> {
   const blob = makeUploadBlob(UPLOAD_CHUNK_MB);
 
   let totalSent    = 0;
   let measuredSent = 0;
-  let measureStart = 0;
 
-  // Track completed chunks per stream
-  const streamCompletedChunks = new Array(UPLOAD_STREAMS).fill(0);
+  const testStart = performance.now();
+  const warmupEndTime = testStart + UPLOAD_WARMUP_MS;
 
-  const handleBytes = (delta: number, isWarmup: boolean) => {
+  // Sliding-window progress display
+  let lastReportTime = performance.now();
+  let bytesInWindow  = 0;
+
+  const handleBytes = (delta: number) => {
     totalSent += delta;
-    if (!isWarmup) {
-      if (measureStart === 0) {
-        measureStart = performance.now();
-      }
+    bytesInWindow += delta;
+    const now = performance.now();
+
+    if (now >= warmupEndTime) {
       measuredSent += delta;
+    }
+
+    if (onProgress && now - lastReportTime >= 500) {
+      const dt = (now - lastReportTime) / 1000;
+      onProgress((bytesInWindow * 8) / dt / 1_000_000);
+      lastReportTime = now;
+      bytesInWindow  = 0;
     }
   };
 
@@ -317,21 +318,12 @@ export async function measureUploadSpeed(): Promise<number> {
   );
 
   await Promise.allSettled(
-    acs.map((ac, index) =>
-      xhrUploadStream(
-        blob,
-        handleBytes,
-        () => {
-          streamCompletedChunks[index]++;
-        },
-        () => streamCompletedChunks[index] < 2,
-        ac.signal
-      )
-    )
+    acs.map((ac) => xhrUploadStream(blob, handleBytes, ac.signal))
   );
   clearTimeout(timer);
 
-  const elapsed = (performance.now() - measureStart) / 1000;
+  const testEnd = performance.now();
+  const elapsed = (testEnd - warmupEndTime) / 1000;
   if (elapsed <= 0 || measuredSent === 0) return 0;
 
   return Math.round((measuredSent * 8) / elapsed / 1_000_000 * 100) / 100;
