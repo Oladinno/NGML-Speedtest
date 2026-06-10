@@ -130,6 +130,7 @@ export default function SpeedTestClient() {
     unloadedLatencyMs: 0,
     jitterMs: 0,
     progress: 0,
+    currentSpeedMbps: 0,
   });
 
   const [selectedServer, setSelectedServer] = useState(SERVERS[0]);
@@ -183,22 +184,23 @@ export default function SpeedTestClient() {
       unloadedLatencyMs: 0,
       jitterMs: 0,
       progress: 5,
+      currentSpeedMbps: 0,
     });
 
     try {
       // 1. Measure Download Speed (parallel streams, warmup excluded — ~14s)
       const downloadMbps = await measureDownloadSpeed((mbps) => {
-        setState((s) => ({ ...s, downloadMbps: mbps, progress: 25 }));
+        setState((s) => ({ ...s, currentSpeedMbps: mbps, progress: 25 }));
       });
 
-      setState((s) => ({ ...s, downloadMbps, status: "testing-upload", progress: 50 }));
+      setState((s) => ({ ...s, downloadMbps, status: "testing-upload", currentSpeedMbps: 0, progress: 50 }));
 
       // 2. Measure Upload Speed (parallel XHR streams, warmup excluded — ~12s)
       const uploadMbps = await measureUploadSpeed((mbps) => {
-        setState((s) => ({ ...s, uploadMbps: mbps, progress: 65 }));
+        setState((s) => ({ ...s, currentSpeedMbps: mbps, progress: 65 }));
       });
 
-      setState((s) => ({ ...s, uploadMbps, status: "testing-ping", progress: 70 }));
+      setState((s) => ({ ...s, uploadMbps, status: "testing-ping", currentSpeedMbps: 0, progress: 70 }));
 
       // 3. Measure Ping & Jitter
       const ping = await measurePing();
@@ -280,6 +282,7 @@ export default function SpeedTestClient() {
       unloadedLatencyMs: 0,
       jitterMs: 0,
       progress: 0,
+      currentSpeedMbps: 0,
     });
     setConnectionMeta(null);
     setSaved(false);
@@ -291,9 +294,9 @@ export default function SpeedTestClient() {
 
   const primarySpeed = showResult
     ? state.downloadMbps
-    : state.status === "testing-upload"
-    ? state.uploadMbps
-    : state.downloadMbps;
+    : isTesting
+    ? (state.currentSpeedMbps ?? 0)
+    : 0;
 
   const displaySpeed = useAnimatedNumber(primarySpeed);
 

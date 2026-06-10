@@ -35,6 +35,7 @@ export interface SpeedTestState {
   unloadedLatencyMs: number;
   jitterMs: number;
   progress: number;
+  currentSpeedMbps?: number;
   error?: string;
 }
 
