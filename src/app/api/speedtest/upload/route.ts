@@ -25,14 +25,18 @@ export async function POST(request: Request) {
 
   // Stream the body as it arrives — start the clock on the first byte.
   // This excludes connection setup time from the measurement (more accurate).
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    if (receivedBytes === 0) {
-      startTime = performance.now();
+      if (receivedBytes === 0) {
+        startTime = performance.now();
+      }
+      receivedBytes += value?.length ?? 0;
     }
-    receivedBytes += value?.length ?? 0;
+  } catch (err) {
+    // Client aborted the upload request gracefully
   }
 
   const endTime        = performance.now();

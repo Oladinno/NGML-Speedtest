@@ -108,8 +108,8 @@ function useAnimatedNumber(value: number, duration = 600) {
 
 function statusLabel(status: SpeedTestState["status"]): string {
   switch (status) {
-    case "testing-download": return "DOWNLOAD (~14s)";
-    case "testing-upload":   return "UPLOAD (~12s)";
+    case "testing-download": return "DOWNLOAD (~12s)";
+    case "testing-upload":   return "UPLOAD (~10s)";
     case "testing-ping":     return "PING / JITTER";
     case "testing-loaded-latency": return "LOADED LATENCY";
     case "complete": return "COMPLETE";
@@ -176,7 +176,7 @@ export default function SpeedTestClient() {
     setSaved(false);
 
     setState({
-      status: "testing-download",
+      status: "testing-ping",
       downloadMbps: 0,
       uploadMbps: 0,
       pingMs: 0,
@@ -188,21 +188,7 @@ export default function SpeedTestClient() {
     });
 
     try {
-      // 1. Measure Download Speed (parallel streams, warmup excluded — ~14s)
-      const downloadMbps = await measureDownloadSpeed((mbps) => {
-        setState((s) => ({ ...s, currentSpeedMbps: mbps, progress: 25 }));
-      });
-
-      setState((s) => ({ ...s, downloadMbps, status: "testing-upload", currentSpeedMbps: 0, progress: 50 }));
-
-      // 2. Measure Upload Speed (parallel XHR streams, warmup excluded — ~12s)
-      const uploadMbps = await measureUploadSpeed((mbps) => {
-        setState((s) => ({ ...s, currentSpeedMbps: mbps, progress: 65 }));
-      });
-
-      setState((s) => ({ ...s, uploadMbps, status: "testing-ping", currentSpeedMbps: 0, progress: 70 }));
-
-      // 3. Measure Ping & Jitter
+      // 1. Measure Ping & Jitter (Idle)
       const ping = await measurePing();
       if (ping.meta) {
         setConnectionMeta(ping.meta);
@@ -213,17 +199,43 @@ export default function SpeedTestClient() {
         pingMs: ping.unloaded,
         jitterMs: ping.jitter,
         unloadedLatencyMs: ping.unloaded,
-        status: "testing-loaded-latency",
-        progress: 85,
+        status: "testing-download",
+        progress: 20,
       }));
 
-      // 4. Measure Loaded Latency
+      // 2. Measure Download Speed (parallel streams, warmup excluded — ~12s)
+      const downloadMbps = await measureDownloadSpeed((mbps) => {
+        setState((s) => ({ ...s, currentSpeedMbps: mbps, progress: 35 }));
+      });
+
+      setState((s) => ({
+        ...s,
+        downloadMbps,
+        status: "testing-loaded-latency",
+        currentSpeedMbps: 0,
+        progress: 55,
+      }));
+
+      // 3. Measure Loaded Latency
       const loaded = await measureLoadedLatency();
 
       setState((s) => ({
         ...s,
         loadedLatencyMs: loaded,
+        status: "testing-upload",
+        progress: 70,
+      }));
+
+      // 4. Measure Upload Speed (parallel XHR streams, warmup excluded — ~10s)
+      const uploadMbps = await measureUploadSpeed((mbps) => {
+        setState((s) => ({ ...s, currentSpeedMbps: mbps, progress: 85 }));
+      });
+
+      setState((s) => ({
+        ...s,
+        uploadMbps,
         status: "complete",
+        currentSpeedMbps: 0,
         progress: 100,
       }));
 

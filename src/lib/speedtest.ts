@@ -13,15 +13,15 @@
 //  - The client controls the test window; the server is a simple stateless byte-pump
 //  - Proper TCP stream reuse via HTTP/2 multiplexing (browsers do this automatically)
 
-const DOWNLOAD_STREAMS     = 4;       // parallel fetch() connections
-const DOWNLOAD_DURATION_MS = 14_000;  // total test window (incl. warmup)
-const DOWNLOAD_WARMUP_MS   = 2_000;   // excluded from final average
-const DOWNLOAD_CHUNK_MB    = 4;       // bytes per individual request (~4 MB)
+const DOWNLOAD_STREAMS     = 6;       // parallel fetch() connections
+const DOWNLOAD_DURATION_MS = 12_000;  // total test window (incl. warmup)
+const DOWNLOAD_WARMUP_MS   = 1_500;   // excluded from final average
+const DOWNLOAD_CHUNK_MB    = 64;      // bytes per individual request (64 MB)
 
-const UPLOAD_STREAMS       = 3;       // parallel XHR connections
-const UPLOAD_DURATION_MS   = 12_000;  // total test window (incl. warmup)
-const UPLOAD_WARMUP_MS     = 2_000;
-const UPLOAD_CHUNK_MB      = 4;       // bytes per individual upload request (~4 MB)
+const UPLOAD_STREAMS       = 5;       // parallel XHR connections
+const UPLOAD_DURATION_MS   = 10_000;  // total test window (incl. warmup)
+const UPLOAD_WARMUP_MS     = 1_500;
+const UPLOAD_CHUNK_MB      = 32;      // bytes per individual upload request (32 MB)
 
 const PING_SAMPLES = 10;
 
@@ -120,19 +120,32 @@ export async function measurePing(): Promise<PingResult> {
 }
 
 export async function measureLoadedLatency(): Promise<number> {
-  const downloadUrl = `/api/speedtest/download?size=4&t=${Date.now()}`;
+  const ac = new AbortController();
+  const downloadUrl = `/api/speedtest/download?size=64&t=${Date.now()}`;
   const samples: number[] = [];
-  const downloadPromise = fetch(downloadUrl).then(async (r) => {
+
+  const downloadPromise = fetch(downloadUrl, { signal: ac.signal }).then(async (r) => {
     if (!r.body) return;
     const reader = r.body.getReader();
-    while (!(await reader.read()).done) { /* drain */ }
+    try {
+      while (true) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    } catch (e) {
+      // Stream aborted gracefully
+    }
   });
+
   for (let i = 0; i < 6; i++) {
-    const res = await pingOnce();
+    const res = await pingOnce(ac.signal);
     samples.push(res.duration);
-    await new Promise((r) => setTimeout(r, 200));
+    await new Promise((r) => setTimeout(r, 150));
   }
-  await downloadPromise;
+
+  ac.abort();
+  await downloadPromise.catch(() => {});
+
   samples.sort((a, b) => a - b);
   const trimmed = samples.slice(1, -1);
   return Math.round((trimmed.reduce((a, b) => a + b, 0) / trimmed.length) * 10) / 10;

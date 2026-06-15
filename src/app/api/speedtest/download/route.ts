@@ -31,9 +31,9 @@ const FILLER_CHUNK = (() => {
 export async function GET(request: NextRequest) {
   const sizeParam = request.nextUrl.searchParams.get("size") || "4";
 
-  // Cap at 8 MB per request — safe on every serverless platform.
+  // Cap at 128 MB per request — safe on every serverless platform.
   // The client loops requests to saturate the link over the full test window.
-  const sizeMB    = Math.min(Math.max(parseInt(sizeParam, 10) || 4, 1), 8);
+  const sizeMB    = Math.min(Math.max(parseInt(sizeParam, 10) || 64, 1), 128);
   const totalBytes = sizeMB * 1024 * 1024;
 
   let sent = 0;
